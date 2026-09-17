@@ -8,6 +8,14 @@
     "owner": "survivalizer",
     "versions": [
       {
+        "changelog": "## [0.26.20.0] - 2026-09-17\n\n### 🚀 Features\n- Redirect the stream endpoint to the origin for direct play (#11)\n\n",
+        "checksum": "5cf56785adf3e981428c7cbaef302eb4",
+        "sourceUrl": "https://github.com/survivalizer/Gelato/releases/download/v0.26.20.0/chocolate-gelato_0.26.20.0.zip",
+        "targetAbi": "12.1.0.0",
+        "timestamp": "2026-09-17T14:05:38Z",
+        "version": "0.26.20.0"
+      },
+      {
         "changelog": "## [0.26.19.6] - 2026-09-17\n\n### 🐛 Bug Fixes\n- Keep unreachable hosts out of direct play (#10)\n\n",
         "checksum": "d742d3940f740db91877e6fd067917f2",
         "sourceUrl": "https://github.com/survivalizer/Gelato/releases/download/v0.26.19.6/chocolate-gelato_0.26.19.6.zip",
