@@ -114,7 +114,9 @@
               </label>
               <div class="fieldDescription">
                 Clients fetch the stream straight from the debrid host instead of proxying through
-                Jellyfin. Leave off if your debrid service limits streams to a single IP.
+                Jellyfin. Leave off if your debrid service limits streams to a single IP. Streams
+                on a private/LAN address or a container hostname keep proxying, since a remote
+                client could not reach those.
               </div>
             </div>
 

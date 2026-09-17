@@ -439,7 +439,8 @@ public sealed class MediaSourceManagerDecorator(
         // Stub path after probing is done so the real URL is never sent to clients, and force
         // File protocol so they proxy through Jellyfin instead of direct-playing. Opt-in
         // DirectPlay skips this for remote http(s) URLs so clients pull the stream from the
-        // debrid host themselves; loopback P2P proxy URLs are always masked.
+        // debrid host themselves; URLs a client could not reach anyway - the loopback P2P
+        // proxy, private/LAN addresses, container hostnames - are always masked.
         if (IsPlaybackInfoAction(ctx.GetActionName()) && !AllowDirectPlay(selected, user))
         {
             selected.Path = "/stub";

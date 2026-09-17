@@ -33,7 +33,8 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Hand clients the real stream URL at playback so they fetch it directly from the debrid
     /// host instead of proxying through Jellyfin. Off by default: proxying makes every stream
     /// arrive from the server's IP, which IP-limited debrid services require. Only remote
-    /// http(s) streams are ever exposed; P2P proxy URLs stay masked regardless.
+    /// http(s) streams a client can actually reach are ever exposed; the P2P proxy and any
+    /// private/LAN or container host stay masked regardless.
     /// </summary>
     public bool DirectPlay { get; set; } = false;
     public List<CatalogConfig> Catalogs { get; set; } = [];
