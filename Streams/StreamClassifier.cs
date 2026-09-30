@@ -26,20 +26,23 @@ public static class StreamClassifier
         "youtube",
     };
 
+    /// <summary>
+    /// Decides by type and locator only. With stream data: type is in NoticeTypes. Without
+    /// stream data: not valid and not torrent. Text is checked in PlanSync and notices without
+    /// text are dropped.
+    /// </summary>
     public static bool IsNotice(StremioStream stream, StreamData? data)
     {
-        var hasText =
-            !string.IsNullOrWhiteSpace(stream.Name)
-            || !string.IsNullOrWhiteSpace(stream.Description)
-            || !string.IsNullOrWhiteSpace(stream.Title);
-        if (!hasText)
-            return false;
-
         if (data is not null)
             return data.Type is { } type && NoticeTypes.Contains(type);
 
         return !stream.IsValid() && !stream.IsTorrent();
     }
+
+    private static bool HasText(StremioStream stream) =>
+        !string.IsNullOrWhiteSpace(stream.Name)
+        || !string.IsNullOrWhiteSpace(stream.Description)
+        || !string.IsNullOrWhiteSpace(stream.Title);
 
     /// <summary>
     /// Exactly today's acceptance rule: a valid URL, and no torrent while P2P is off.
@@ -57,6 +60,10 @@ public static class StreamClassifier
         return new Guid(MD5.HashData(Encoding.UTF8.GetBytes(key)));
     }
 
+    /// <summary>
+    /// Orders playables before notices, deduplicates (drops notices with external URL matching
+    /// a playable URL and notices without text), and assigns stable notice identities.
+    /// </summary>
     public static IReadOnlyList<SyncEntry> PlanSync(
         IReadOnlyList<StremioStream> streams,
         bool p2pEnabled
@@ -69,7 +76,10 @@ public static class StreamClassifier
         {
             var data = StreamDataMapper.TryMap(stream.StreamData);
             if (IsNotice(stream, data))
-                notices.Add((stream, data));
+            {
+                if (HasText(stream))
+                    notices.Add((stream, data));
+            }
             else if (IsPlayable(stream, p2pEnabled))
                 playable.Add(new SyncEntry(stream, data, false, stream.GetGuid()));
         }

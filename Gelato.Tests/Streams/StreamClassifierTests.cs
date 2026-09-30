@@ -190,4 +190,17 @@ public class StreamClassifierTests
 
         Assert.Equal(7L, planned[0].Data!.Size);
     }
+
+    /// <summary>
+    /// A notice type is a notice whatever it carries: with no text it is dropped, never
+    /// re-tested as playable - otherwise an addon error with a valid URL would be offered as a
+    /// version.
+    /// </summary>
+    [Fact]
+    public void NoticeTypedStreamWithAValidUrlButNoText_IsDropped()
+    {
+        Assert.Empty(
+            StreamClassifier.PlanSync([S(url: Good, name: null, data: Typed("error"))], true)
+        );
+    }
 }
