@@ -1,0 +1,17 @@
+{
+  "streams": [
+    {
+      "name": "[❌] AIOStreams",
+      "description": "AIOStreams v2 requires you to reconfigure. Please click this stream to reconfigure.",
+      "externalUrl": "https://example.invalid/scrubbed/0",
+      "streamData": {
+        "type": "error",
+        "error": {
+          "title": "[❌] AIOStreams",
+          "description": "AIOStreams v2 requires you to reconfigure. Please click this stream to reconfigure."
+        },
+        "id": "error.[❌] AIOStreams"
+      }
+    }
+  ]
+}
