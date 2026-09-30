@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using Gelato.Config;
 using Gelato.Decorators;
+using Gelato.Streams;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Common.Configuration;
@@ -14,6 +15,7 @@ using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.Globalization;
 using MediaBrowser.Model.IO;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
@@ -32,7 +34,9 @@ public sealed class GelatoManager(
     IDirectoryService directoryService,
     IApplicationPaths appPaths,
     IUserManager userManager,
-    IUserDataManager userDataManager
+    IUserDataManager userDataManager,
+    IMediaStreamRepository mediaStreamRepository,
+    ILocalizationManager localization
 )
 {
     public const string StreamTag = "gelato-stream";
@@ -569,26 +573,12 @@ public sealed class GelatoManager(
         var streams = await stremio.GetStreamsAsync(uri).ConfigureAwait(false);
         var httpPort = GetHttpPort();
 
-        // Filter valid streams
-        var acceptable = streams
-            .Select(s =>
-            {
-                if (!s.IsValid())
-                {
-                    _log.LogWarning("Invalid stream, skipping {StreamName}", s.Name);
-                    return null;
-                }
-
-                if (!cfg.P2PEnabled && s.IsTorrent())
-                {
-                    _log.LogDebug($"P2P stream, skipping {s.Name}");
-                    return null;
-                }
-
-                return s;
-            })
-            .Where(s => s is not null)
-            .ToList();
+        // Playable versions first, then notices (addon messages, errors, statistics), so a
+        // notice is never the default version while something playable exists.
+        var entries = StreamClassifier.PlanSync(streams, cfg.P2PEnabled);
+        var noticeCount = entries.Count - StreamClassifier.PlayableCount(entries);
+        if (noticeCount > 0)
+            _log.LogDebug("SyncStreams: {Count} notice(s) for {Id}", noticeCount, uri.ExternalId);
 
         // Get existing streams. A movie's rows only by Stremio id: movies of a collection share
         // the TmdbCollection id, and the other movies' rows would be treated as stale below.
@@ -634,22 +624,26 @@ public sealed class GelatoManager(
         }
 
         var upsertedStreams = new List<Video>();
+        var pendingMediaStreams = new List<(Guid ItemId, IReadOnlyList<MediaStream> Streams)>();
 
-        for (var i = 0; i < acceptable.Count; i++)
+        for (var i = 0; i < entries.Count; i++)
         {
-            var s = acceptable[i];
+            var entry = entries[i];
+            var s = entry.Stream;
             var index = i + 1;
-            var path = s.IsFile()
-                ? s.Url
-                : $"http://127.0.0.1:{httpPort}/gelato/stream?ih={s.InfoHash}"
-                    + (s.FileIdx is not null ? $"&idx={s.FileIdx}" : "")
-                    + (
-                        s.Sources is { Count: > 0 }
-                            ? $"&trackers={Uri.EscapeDataString(string.Join(',', s.Sources))}"
-                            : ""
-                    );
+            var path = entry.IsNotice
+                ? NoticeClip.PathFor(httpPort, entry.Guid)
+                : s.IsFile()
+                    ? s.Url
+                    : $"http://127.0.0.1:{httpPort}/gelato/stream?ih={s.InfoHash}"
+                        + (s.FileIdx is not null ? $"&idx={s.FileIdx}" : "")
+                        + (
+                            s.Sources is { Count: > 0 }
+                                ? $"&trackers={Uri.EscapeDataString(string.Join(',', s.Sources))}"
+                                : ""
+                        );
 
-            var streamGuid = s.GetGuid();
+            var streamGuid = entry.Guid;
             var isNewStreamItem = !existingByGuid.TryGetValue(streamGuid, out var streamItem);
 
             if (isNewStreamItem)
@@ -711,6 +705,23 @@ public sealed class GelatoManager(
             }
             streamItem.SetGelatoData("index", index);
             streamItem.SetGelatoData("guid", streamGuid);
+            if (entry.IsNotice)
+            {
+                streamItem.SetGelatoData(StreamClassifier.NoticeKey, true);
+                streamItem.RunTimeTicks = null;
+            }
+
+            var rowId = streamItem.Id;
+            var plan = StreamRowPlanner.Plan(
+                isNewStreamItem,
+                entry.IsNotice,
+                streamItem.GelatoData<string>(MediaInfoProvenance.Key),
+                () => HasVideoStream(rowId),
+                entry.Data,
+                s.Url,
+                ToIso6392
+            );
+            ApplyMediaInfoPlan(streamItem, plan, pendingMediaStreams);
             // Keep map current so stale detection below uses the final upserted set.
             existingByGuid[streamGuid] = streamItem;
 
@@ -719,6 +730,10 @@ public sealed class GelatoManager(
 
         //upsertedStreams = SaveItems(upsertedStreams, (Folder)primary.GetParent()).Cast<Video>().ToList();
         persistence.SaveItems(upsertedStreams, ct);
+
+        // A media stream references its item, so these go in after the rows are saved.
+        foreach (var (itemId, mediaStreams) in pendingMediaStreams)
+            mediaStreamRepository.SaveMediaStreams(itemId, mediaStreams, ct);
 
         var newIds = new HashSet<Guid>(upsertedStreams.Select(x => x.Id));
         var stale = existingByGuid
@@ -765,7 +780,47 @@ public sealed class GelatoManager(
             $"SyncStreams finished GelatoId={uri.ExternalId} userId={userId} duration={Math.Round(stopwatch.Elapsed.TotalSeconds, 1)}s streams={upsertedStreams.Count}"
         );
 
-        return acceptable.Count;
+        return StreamClassifier.PlayableCount(entries);
+    }
+
+    private static void ApplyMediaInfoPlan(
+        Video row,
+        RowMediaInfoPlan plan,
+        List<(Guid ItemId, IReadOnlyList<MediaStream> Streams)> pending
+    )
+    {
+        if (plan.Provenance is not null)
+            row.SetGelatoData(MediaInfoProvenance.Key, plan.Provenance);
+
+        if (plan.Decision != MediaInfoWrite.Write || plan.Streams is null)
+            return;
+
+        if (plan.Container is not null)
+            row.Container = plan.Container;
+        if (plan.Size is { } size)
+            row.Size = size;
+        if (plan.RunTimeTicks is { } ticks)
+            row.RunTimeTicks = ticks;
+
+        pending.Add((row.Id, plan.Streams));
+    }
+
+    private bool HasVideoStream(Guid itemId) =>
+        mediaStreamRepository
+            .GetMediaStreams(new MediaStreamQuery { ItemId = itemId, Type = MediaStreamType.Video })
+            .Count > 0;
+
+    /// <summary>AIOStreams sends English language names; Jellyfin resolves them.</summary>
+    private string? ToIso6392(string language)
+    {
+        try
+        {
+            return localization.FindLanguageInfo(language)?.ThreeLetterISOLanguageName;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     /// <summary>
