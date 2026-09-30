@@ -8,6 +8,14 @@
     "owner": "survivalizer",
     "versions": [
       {
+        "changelog": "## [0.26.21.0] - 2026-09-30\n\n### 🐛 Bug Fixes\n- Accept torrent-only streams again (#13)\n\n### 🚀 Features\n- Consume AIOStreams stream data for media info and notices (#12)\n\n",
+        "checksum": "532b0d69a57dff3ed87c3fcab9f51bcc",
+        "sourceUrl": "https://github.com/survivalizer/Gelato/releases/download/v0.26.21.0/chocolate-gelato_0.26.21.0.zip",
+        "targetAbi": "12.1.0.0",
+        "timestamp": "2026-09-30T03:56:20Z",
+        "version": "0.26.21.0"
+      },
+      {
         "changelog": "## [0.26.20.0] - 2026-09-17\n\n### 🚀 Features\n- Redirect the stream endpoint to the origin for direct play (#11)\n\n",
         "checksum": "5cf56785adf3e981428c7cbaef302eb4",
         "sourceUrl": "https://github.com/survivalizer/Gelato/releases/download/v0.26.20.0/chocolate-gelato_0.26.20.0.zip",
