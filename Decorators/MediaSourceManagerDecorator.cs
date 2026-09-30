@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using Gelato.Providers;
 using Gelato.Services;
+using Gelato.Streams;
 using Jellyfin.Data;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
@@ -403,7 +404,7 @@ public sealed class MediaSourceManagerDecorator(
                 return sources;
         }
 
-        if (NeedsProbe(selected))
+        if (ProbeGate.ShouldProbe(owner, selected))
         {
             var libraryOptions = _libraryManager.GetLibraryOptions(owner);
 
@@ -417,6 +418,9 @@ public sealed class MediaSourceManagerDecorator(
             //  var subtitleTask = DownloadSubtitles((Video)owner, ct);
 
             await Task.WhenAll(metadataTask, segmentTask).ConfigureAwait(false);
+
+            // Only a probe that ran marks the row as probed; a failed one is retried next time.
+            ProbeGate.RecordProbe(owner, await metadataTask.ConfigureAwait(false));
 
             await owner
                 .UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, ct)
@@ -461,10 +465,6 @@ public sealed class MediaSourceManagerDecorator(
                     !string.IsNullOrEmpty(s.Id) && Guid.TryParse(s.Id, out var g) && g == target
                 ) ?? list.FirstOrDefault();
         }
-
-        static bool NeedsProbe(MediaSourceInfo s) =>
-            (s.MediaStreams?.All(ms => ms.Type != MediaStreamType.Video) ?? true)
-            || (s.RunTimeTicks ?? 0) < TimeSpan.FromMinutes(2).Ticks;
 
         BaseItem ResolveOwnerFor(MediaSourceInfo s, BaseItem fallback) =>
             Guid.TryParse(s.ETag, out var g) ? libraryManager.GetItemById(g) ?? fallback : fallback;
@@ -680,7 +680,7 @@ public sealed class MediaSourceManagerDecorator(
         return streams;
     }
 
-    private async Task ProbeStreamAsync(Video owner, string streamUrl, CancellationToken ct)
+    private async Task<bool> ProbeStreamAsync(Video owner, string streamUrl, CancellationToken ct)
     {
         var gelatoFilename = owner.GelatoData<string>("filename");
         var strmBaseName = !string.IsNullOrEmpty(gelatoFilename)
@@ -740,10 +740,13 @@ public sealed class MediaSourceManagerDecorator(
                 );
                 await owner.RefreshMetadata(options, ct).ConfigureAwait(false);
             }
+
+            return true;
         }
         catch (Exception ex)
         {
             _log.LogError(ex, "Stream probe failed for {Id}", owner.Id);
+            return false;
         }
         finally
         {
