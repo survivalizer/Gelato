@@ -70,15 +70,18 @@ does:
 | Obtaining stream data | Send `User-Agent: AIOStreams-Gelato/<plugin version>` on addon requests | AIOStreams' `provideStreamData` defaults to `null`, meaning auto-detect: enabled for any User-Agent starting with `AIO` (`packages/server/src/routes/stremio/stream.ts`). Works on any instance, public ones included, with no setup. An operator's explicit `false` still wins. No other AIOStreams behaviour keys off the `AIO` prefix. `Gelato` in the name lets AIOStreams *variants* (User-Agent-conditioned configs) target Jellyfin. |
 | Trusting AIOStreams' media info | By source, using `parsedFile.mediaInfoQuality` | AIOStreams' Jellyfin mode never probes; Gelato has ffprobe. Trust `probe` quality; re-probe anything guessed from a filename (`indexer`, `addon`). Display reaches parity and playback decisions are never worse than today. |
 | Notices | Shown as versions, after every playable version | Matches AIOStreams' Jellyfin mode. |
+| Dolby Vision mapping | More precise than AIOStreams (DV + HDR10 → DOVI with HDR10) | Jellyfin's direct-play decisions distinguish DV profiles and Gelato trusts probe data without re-probing; see the builder. |
 | Persisting raw stream data | No | About 2 KB per version and 400+ versions on some titles. Only the built media info (Jellyfin's media-stream table) and a provenance tag are saved. |
 
 ## Design
 
 ### Definitions
 
-- **Playable stream:** has a valid URL (today's `StremioStream.IsValid()`) or a torrent hash.
-  Streams that need request headers remain playable in this sub-project; sub-project 2
-  changes that.
+- **Playable stream:** exactly what today's filter accepts. It has a valid URL
+  (`StremioStream.IsValid()`), and it is skipped if it carries a torrent hash while P2P is
+  disabled. Streams that need request headers remain playable in this sub-project;
+  sub-project 2 changes that. Torrent-only streams (a hash, no URL) are rejected by
+  `IsValid()` today and stay rejected here (see the findings).
 - **Notice:** defined under [Notices](#notices).
 - A stream that is neither playable nor a notice is dropped, as today.
 
@@ -91,9 +94,11 @@ does:
 
 2. **`StreamData` model** (new file). `StremioStream` gains `StreamData` as a raw
    `JsonElement?`. A mapper converts it to the typed model **per stream, inside a
-   try/catch**. If one stream's data fails to map, that stream's `StreamData` is `null` and
-   it falls back to today's behaviour; the rest of the response is unaffected. Every field is
-   optional and unknown fields are ignored. `StremioStream` also gains `ExternalUrl`, used
+   try/catch**, reading each field only when it has the expected JSON type. A wrong-typed
+   field is dropped and the rest still maps; if `streamData` is not an object at all, that
+   stream's `StreamData` is `null` and it falls back to today's behaviour. The rest of the
+   response is unaffected either way. Every field is optional and unknown fields are
+   ignored. `StremioStream` also gains `ExternalUrl`, used
    only by the notice duplicate-link rule. Fields used:
 
    | Field | Notes |
@@ -107,25 +112,84 @@ does:
    | track (audio/subtitle) | `lang`, `codec`, `title`, `tag`, `channels`, `default`, `forced`, `commentary`, `dub`, `original`, `hearingImpaired`, `visualImpaired` |
 
 3. **`StreamMediaInfo` builder.** A pure function from `StreamData` to Jellyfin
-   `MediaStream`s plus container, runtime ticks and size. It is a port of `buildMediaStreams`
-   and its helpers in `packages/core/src/jellyfin/media.ts`, with the mapping tables copied
-   verbatim: `ENCODE_CODEC`, `AUDIO_CODEC`, `CHANNEL_COUNT`, `CHANNEL_LAYOUT`,
-   `RESOLUTION_SIZE`, `VIDEO_RANGE_TYPE`, `RANGE_PRIORITY`, `NOT_A_TRACK`.
+   `MediaStream`s plus container, runtime ticks, size and a trust verdict. It ports
+   `buildMediaStreams` and its helpers in `packages/core/src/jellyfin/media.ts`, with the
+   mapping tables copied verbatim: `ENCODE_CODEC`, `AUDIO_CODEC`, `CHANNEL_COUNT`,
+   `CHANNEL_LAYOUT`, `RESOLUTION_SIZE`, `NOT_A_TRACK`, and the container list of
+   `containerOf`.
 
-   - **Video:** codec from `ENCODE_CODEC`; width and height from `RESOLUTION_SIZE`;
-     `VideoRangeType` from the visual tags via `VIDEO_RANGE_TYPE`, resolved by priority
-     DOVI > HDR10Plus > HDR10 > HLG > SDR; `VideoRange` is `SDR` when the type is SDR,
-     otherwise `HDR`; `BitDepth` is 10 when the range is not SDR or the tags include
-     `10bit`, otherwise 8.
-   - **Audio:** one stream per `audioTracks` entry when present (codec is the track's
-     codec, else `AUDIO_CODEC[tag]`; channels from `CHANNEL_COUNT` and `CHANNEL_LAYOUT`).
-     Otherwise the placeholder and single-stream fallbacks of `audioStreams`.
-   - **Subtitles:** embedded `subtitleTracks` only when `mediaInfoQuality` is `probe`;
-     otherwise the placeholder languages of `embeddedSubtitleStreams`.
+   **It sets Jellyfin's inputs, not its outputs.** AIOStreams emits JSON and sets
+   `VideoRange`, `VideoRangeType`, `DisplayTitle` and `IsTextSubtitleStream` directly. In
+   Jellyfin 12.1 these are read-only, computed by `MediaStream.GetVideoColorRange()` and
+   friends (`MediaBrowser.Model/Entities/MediaStream.cs` @ `v12.1`). The builder sets the
+   fields they are computed from:
+
+   | Intended range | Fields set |
+   |---|---|
+   | SDR | none |
+   | HDR10 | `ColorTransfer=smpte2084`, `ColorPrimaries=bt2020`, `ColorSpace=bt2020nc` |
+   | HDR10+ | HDR10 fields + `Hdr10PlusPresentFlag=true` |
+   | HLG | `ColorTransfer=arib-std-b67`, `ColorPrimaries=bt2020`, `ColorSpace=bt2020nc` |
+   | DOVI (profile 5) | `DvProfile=5`, `RpuPresentFlag=1`, `BlPresentFlag=1`, `DvBlSignalCompatibilityId=0` |
+   | DOVI with HDR10 | `DvProfile=8`, `RpuPresentFlag=1`, `BlPresentFlag=1`, `DvBlSignalCompatibilityId=1` + HDR10 fields |
+   | DOVI with HDR10+ | DOVI-with-HDR10 fields + `Hdr10PlusPresentFlag=true` |
+   | DOVI with HLG | `DvProfile=8`, `RpuPresentFlag=1`, `BlPresentFlag=1`, `DvBlSignalCompatibilityId=4` + HLG fields |
+
+   Track titles and flag labels (Forced, Commentary, …) go in `Title`, which Jellyfin folds
+   into its computed `DisplayTitle`. A subtitle's text/image kind follows from its `Codec`.
+
+   **Dolby Vision is mapped more precisely than AIOStreams does.** The parser emits a DV file
+   with an HDR10 base as `visualTags: ["DV", "HDR10"]`; AIOStreams' priority rule collapses
+   that to `DOVI`. In Jellyfin, `DOVI` (profile 5, no fallback) and `DOVIWithHDR10` (profile
+   8.1, playable by HDR10 devices) lead to different direct-play decisions, and Gelato trusts
+   probe-quality data without re-probing. Collapsing would make decisions worse than
+   ffprobe's, which the constraints forbid. (`HDR+DV`, `DV Only` and `HDR Only` are filter-only
+   tags that the parser never emits.) Rules, first match wins:
+
+   | Visual tags contain | Range |
+   |---|---|
+   | `DV` and `HDR10+` | DOVI with HDR10+ |
+   | `DV` and (`HDR10` or `HDR`) | DOVI with HDR10 |
+   | `DV` and `HLG` | DOVI with HLG |
+   | `DV` | DOVI (profile 5) |
+   | `HDR10+` | HDR10+ |
+   | `HDR10` or `HDR` | HDR10 |
+   | `HLG` | HLG |
+   | otherwise | SDR |
+
+   `BitDepth` is 10 when the range is not SDR or the tags include `10bit`, otherwise 8.
+
+   - **Video:** codec from `ENCODE_CODEC`; width and height from `RESOLUTION_SIZE`; range
+     fields as above.
+   - **Audio:** one stream per `audioTracks` entry when present (codec is the track's codec,
+     else `AUDIO_CODEC[tag]`; channels from `CHANNEL_COUNT` and `CHANNEL_LAYOUT`). Otherwise,
+     on guessed data only, the placeholder and single-stream fallbacks of `audioStreams`.
+   - **Subtitles:** embedded `subtitleTracks` when `mediaInfoQuality` is `probe`; otherwise,
+     on guessed data only, the placeholder languages of `embeddedSubtitleStreams`. At probe
+     quality an empty track list means AIOStreams probed the file and found no subtitles;
+     placeholders (built from the filename's language list) would advertise subtitles the
+     file doesn't have, on a row that is never re-probed. Guessed rows are re-probed before
+     playback, so placeholders there are display-only.
+   - **Languages:** resolved through Jellyfin's
+     `ILocalizationManager.FindLanguageInfo(name).ThreeLetterISOLanguageName` (AIOStreams
+     sends English names). Unresolved names leave `Language` empty.
    - **Container:** `parsedFile.container`, then `parsedFile.extension`, then the filename's
      extension, then the URL's; accepted values as in `containerOf`; default `mkv`.
-   - **Runtime:** `duration` milliseconds converted to ticks.
+   - **Runtime:** a positive `duration` in milliseconds converted to ticks. Missing, zero or
+     negative leaves runtime empty rather than zero, since a zero runtime would force a probe
+     on every play.
+   - **Missing `parsedFile`** yields a video stream and a single audio stream, neither with a
+     codec or dimensions, untrusted (as AIOStreams' own fallbacks produce).
+   - **Bitrate:** when size and a positive duration are both known, the video stream's
+     `BitRate` is the average `size × 8 ÷ seconds`, capped at `int.MaxValue`. Jellyfin's
+     remote bitrate limit reads it, and ffprobe would otherwise supply it.
    - **Unknown values** leave the field empty. The builder never guesses.
+
+   **Trust verdict.** The result is trusted (`aiostreams-probed`) only when
+   `mediaInfoQuality` is `probe` **and** the video codec and resolution are both known
+   **and** there is at least one audio track and every audio track has a codec. Anything
+   less is `aiostreams-guessed` and gets probed before playback, so a thin probe result can
+   never stand in for ffprobe.
 
 4. **Provenance.** A GelatoData key, `mediaInfoSource`, on each stream row: `ffprobe`,
    `aiostreams-probed` or `aiostreams-guessed`. A pure predicate treats `ffprobe` and
@@ -135,13 +199,33 @@ does:
 ### Changes to existing code
 
 - **`GelatoManager.SyncStreams`.** For each playable stream that has stream data: build the
-  media info, save it through `IMediaStreamRepository.SaveMediaStreams`, set container, size
-  and runtime, and record provenance (`aiostreams-probed` when `mediaInfoQuality` is `probe`,
-  otherwise `aiostreams-guessed`). **If the row's provenance is already `ffprobe`, skip it** —
-  a guess must never replace real data on re-sync.
+  media info, set container, size and runtime, and record provenance from the trust
+  verdict. Media streams are saved through `IMediaStreamRepository.SaveMediaStreams` **after**
+  `SaveItems`, because a media stream references its item. Whether to write follows the
+  write rules below; a guess never replaces real data, and an unchanged version is never
+  rewritten.
 - **`MediaSourceManagerDecorator.NeedsProbe`.** Probe when the row is not a notice and any of:
-  no video stream; runtime under 2 minutes; provenance is `aiostreams-guessed`. After
-  `ProbeStreamAsync` succeeds, set provenance to `ffprobe`.
+  no video stream; runtime under 2 minutes; provenance is `aiostreams-guessed`.
+  `ProbeStreamAsync` catches its own exceptions today, so the caller can't tell whether it
+  worked; it changes to return `bool`. Provenance becomes `ffprobe` only when it returns
+  `true`, so a failed probe never passes a guess off as real data.
+
+### Media-info write rules
+
+Decided per stream row on every sync:
+
+| Row | Existing provenance | New data | Action |
+|---|---|---|---|
+| New | — | any | Write; provenance from the trust verdict |
+| Existing | none (legacy), has a video stream | any | Don't write; stamp provenance `ffprobe` (before this release ffprobe was the only writer) |
+| Existing | none (legacy), no video stream | any | Write |
+| Existing | `aiostreams-guessed` | trusted | Write (upgrade) |
+| Existing | `aiostreams-guessed` | guessed | Don't write |
+| Existing | `aiostreams-probed` or `ffprobe` | any | Don't write |
+
+The video-stream check for a legacy row runs once: afterwards the row has provenance. A
+title whose 400+ versions have not changed therefore causes no media-stream writes when it
+is browsed again.
 - **Notice endpoint.** `GET /gelato/notice` on `GelatoApiController` serves a bundled
   placeholder clip: an embedded resource, an h264 mp4 under 20 KB, generated once with
   ffmpeg and committed.
@@ -166,7 +250,8 @@ does:
 - it has no stream data and no playable locator (no valid URL and no torrent hash).
 
 A notice whose link duplicates a playable version's URL is dropped, as in AIOStreams'
-`noticeStreamsOf` (`packages/server/src/routes/jellyfin/resolve.ts`).
+`noticeStreamsOf` (`packages/server/src/routes/jellyfin/resolve.ts`). A notice with no
+name, description or title is dropped: it would be a blank entry with nothing to say.
 
 AIOStreams' Jellyfin mode lists only `external` and `info` as addon notice types and builds
 errors and statistics separately. Over the Stremio protocol all of these arrive as streams,
@@ -182,14 +267,20 @@ while a playable version exists. When only notices exist, the first one is shown
 
 **Identity.** `StremioStream.GetGuid()` throws for a stream with no URL, hash, or
 `bingeGroup` + filename. A notice derives its identity by hashing the key
-`notice|{type}|{name}|{description}` the same way `GetGuid()` hashes its keys (MD5 to a
-`Guid`), with `type` empty when there is no stream data. The same notice therefore maps to
-the same row across syncs instead of churning.
+`notice|{type}|{name}|{occurrence}` the same way `GetGuid()` hashes its keys (MD5 to a
+`Guid`). `type` is empty when there is no stream data; `occurrence` counts earlier notices in
+the same response with the same type and name, so two identical-looking notices get two
+rows. The description is deliberately left out: statistics and many errors carry timings or
+counts that change on every sync, and keying on them would delete and recreate the row
+each time. The row's name and description are updated in place instead.
 
-**Playback.** Path is `http://127.0.0.1:{port}/gelato/notice`. Being loopback, the existing
-reachability rules keep it out of direct play and the stream redirect. At sync it is saved
-with fixed placeholder media info (one h264 video stream) and no provenance, and it is never
-probed.
+**Playback.** Path is `http://127.0.0.1:{port}/gelato/notice?id={guid:N}`. The query makes
+each notice's path unique, which matters because a new row's `Id` is derived from its path;
+the endpoint ignores it. Being loopback, the existing reachability rules keep it out of
+direct play and the stream redirect. At sync it is saved with fixed placeholder media info
+(one h264 video stream, container `mp4`), no provenance and no runtime, and it is never
+probed. The clip is black, 640×360, 4 seconds, about 2 KB: the version name already carries
+the message, and the local ffmpeg build has no text filter.
 
 **Lifecycle.** The existing stale-row cleanup in `SyncStreams` removes a notice once the
 addon stops sending it.
@@ -206,8 +297,10 @@ at debug level.
 - **Other addons:** the User-Agent is harmless; with no stream data they behave as today,
   except that URL-less streams now appear as notices.
 - **Upgrade:** rows without provenance are legacy. Until now ffprobe was the only source of
-  media info, so their data is trusted as today, and rows with no media info already trigger
-  a probe. Upgrading re-probes nothing and loses nothing.
+  media info, so a legacy row that has a video stream is stamped `ffprobe` and kept; one
+  without media info receives stream data (see the write rules). Upgrading re-probes nothing
+  and loses nothing.
+- **Failed probe:** provenance stays as it was, so a guessed row is probed again next time.
 - **Re-sync** never overwrites `ffprobe` media info with a guess.
 - **Jellyfin 12.1:** `IMediaStreamRepository.SaveMediaStreams` is confirmed present in
   `Jellyfin.Controller` 12.1.0.
@@ -218,8 +311,9 @@ Test-driven: each test is written first and watched fail.
 
 **Pure unit tests**
 
-- `StreamData` mapping: complete, partial, extra fields, wrong types (yields `null`, never
-  throws), and per-stream isolation within one response.
+- `StreamData` mapping: complete, partial, extra fields; a wrong-typed field is dropped while
+  the rest maps; a non-object `streamData` yields `null`; never throws; per-stream
+  isolation within one response.
 - `StreamMediaInfo`: table-driven against the pinned AIOStreams tables; HDR priority; bit
   depth; audio tracks versus the tag fallback; subtitle tracks only at `probe` quality; the
   container fallback chain; milliseconds to ticks; unknown values left empty.
@@ -248,6 +342,12 @@ The design is correct either way; the answer only decides how often playback ski
 It is measured during live verification.
 
 ## Findings carried to later sub-projects
+
+- **Standalone bug, not part of parity:** since upstream commit `1ef6fdf` (2026-02-21, "code
+  cleanup and null checks"), `StremioStream.IsValid()` requires a URL, so torrent-only
+  streams are rejected before `SyncStreams` builds their torrent-proxy path. That branch is
+  unreachable for them, and Gelato's torrent engine never sees a pure torrent stream.
+  Fixing it changes which versions users see, so it gets its own change.
 
 - **Sub-project 2:** AIOStreams' Jellyfin mode treats a stream that needs request or
   response headers as **not playable** unless AIOStreams proxied it (`isPlayable`,
