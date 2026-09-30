@@ -39,6 +39,8 @@ public class GelatoStremioProvider(
     {
         var c = http.CreateClient(nameof(GelatoStremioProvider));
         c.Timeout = TimeSpan.FromSeconds(30);
+        // AIOStreams sends its parsed stream data only to "AIO" User-Agents.
+        Gelato.Streams.AddonUserAgent.Apply(c);
         return c;
     }
 
@@ -814,6 +816,12 @@ public class StremioStream
     public int? FileIdx { get; set; }
     public List<string>? Sources { get; set; }
     public StremioBehaviorHints? BehaviorHints { get; set; }
+
+    /// <summary>Where a notice-only stream points (AIOStreams errors, links).</summary>
+    public string? ExternalUrl { get; set; }
+
+    /// <summary>AIOStreams' parsed stream data, kept raw and mapped per stream.</summary>
+    public JsonElement? StreamData { get; set; }
 
     public string GetName()
     {

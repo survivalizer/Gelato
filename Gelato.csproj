@@ -21,6 +21,7 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Config\config.html" />
+    <EmbeddedResource Include="Assets\notice.mp4" />
     <!-- Embed all frontend assets so they are delivered with the plugin -->
     <EmbeddedResource Include="Frontend\**\*" />
   </ItemGroup>
