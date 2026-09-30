@@ -865,14 +865,22 @@ public class StremioStream
 
     public bool IsValid()
     {
+        // With no URL the stream plays through the P2P proxy, which only needs the info hash.
         if (string.IsNullOrWhiteSpace(Url))
-            return false;
+            return IsInfoHash(InfoHash);
 
         if (!Uri.TryCreate(Url, UriKind.Absolute, out var uri))
             return false;
 
         return !(uri.PathAndQuery == "/" || string.IsNullOrEmpty(uri.PathAndQuery));
     }
+
+    /// <summary>
+    /// A BitTorrent v1 info hash: exactly 40 hex characters, since it is spliced into the P2P
+    /// proxy path as-is.
+    /// </summary>
+    private static bool IsInfoHash(string? value) =>
+        value is { Length: 40 } && value.All(char.IsAsciiHexDigit);
 
     public bool IsFile()
     {
