@@ -732,8 +732,33 @@ public sealed class GelatoManager(
         persistence.SaveItems(upsertedStreams, ct);
 
         // A media stream references its item, so these go in after the rows are saved.
+        var provenanceCleared = new List<Video>();
         foreach (var (itemId, mediaStreams) in pendingMediaStreams)
-            mediaStreamRepository.SaveMediaStreams(itemId, mediaStreams, ct);
+        {
+            try
+            {
+                mediaStreamRepository.SaveMediaStreams(itemId, mediaStreams, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "SyncStreams: failed to save media streams for {Id}", itemId);
+
+                // So the next sync re-evaluates and rewrites this row instead of a mismatched
+                // provenance skipping it forever.
+                var row = upsertedStreams.FirstOrDefault(x => x.Id == itemId);
+                if (row is not null)
+                {
+                    row.SetGelatoData<string?>(MediaInfoProvenance.Key, null);
+                    provenanceCleared.Add(row);
+                }
+            }
+        }
+        if (provenanceCleared.Count > 0)
+            persistence.SaveItems(provenanceCleared, ct);
 
         var newIds = new HashSet<Guid>(upsertedStreams.Select(x => x.Id));
         var stale = existingByGuid

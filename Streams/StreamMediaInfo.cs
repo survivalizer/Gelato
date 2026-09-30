@@ -137,10 +137,19 @@ public static class StreamMediaInfo
         return new StreamMediaInfoResult(
             streams,
             ContainerOf(pf, data.Filename, url, data.Type),
-            data.DurationMs is > 0 ? data.DurationMs.Value * TimeSpan.TicksPerMillisecond : null,
+            RunTimeTicksOf(data.DurationMs),
             data.Size is > 0 ? data.Size : null,
             trusted
         );
+    }
+
+    /// <summary>Null when the duration would overflow a tick count, not just wrap around.</summary>
+    private static long? RunTimeTicksOf(long? durationMs)
+    {
+        const long maxMs = long.MaxValue / TimeSpan.TicksPerMillisecond;
+        return durationMs is > 0 and <= maxMs
+            ? durationMs.Value * TimeSpan.TicksPerMillisecond
+            : null;
     }
 
     private static int? Bitrate(StreamData d)

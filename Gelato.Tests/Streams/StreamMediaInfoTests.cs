@@ -309,6 +309,15 @@ public class StreamMediaInfoTests
         Assert.Null(Build(Parsed(), durationMs: durationMs).RunTimeTicks);
     }
 
+    /// <summary>A duration whose tick conversion would overflow must not wrap around.</summary>
+    [Fact]
+    public void OverflowingDuration_LeavesRuntimeEmpty()
+    {
+        var huge = long.MaxValue / TimeSpan.TicksPerMillisecond + 1;
+
+        Assert.Null(Build(Parsed(), durationMs: huge).RunTimeTicks);
+    }
+
     [Fact]
     public void Bitrate_IsTheAverageOfSizeOverDuration()
     {
