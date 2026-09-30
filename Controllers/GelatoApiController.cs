@@ -195,6 +195,11 @@ public sealed class GelatoApiController : ControllerBase
         return File(stream, GuessContentType(selected.Path), enableRangeProcessing: true);
     }
 
+    /// <summary>The placeholder a notice version plays; the id in its path is ignored.</summary>
+    [HttpGet("notice")]
+    public IActionResult Notice() =>
+        File(Gelato.Streams.NoticeClip.Open(), Gelato.Streams.NoticeClip.ContentType, true);
+
     private static ITorrentManagerFile PickHeuristic(TorrentManager manager)
     {
         return manager.Files.OrderByDescending(LikelyVideo).ThenByDescending(f => f.Length).First();
