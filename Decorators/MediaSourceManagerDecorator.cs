@@ -728,6 +728,8 @@ public sealed class MediaSourceManagerDecorator(
                 // fetchers away from the item while its path points at the
                 // temporary .strm file.
                 await probeProvider.FetchAsync(owner, options, ct).ConfigureAwait(false);
+
+                return true;
             }
             else
             {
@@ -739,9 +741,12 @@ public sealed class MediaSourceManagerDecorator(
                     owner.Id
                 );
                 await owner.RefreshMetadata(options, ct).ConfigureAwait(false);
-            }
 
-            return true;
+                // RefreshMetadata's pipeline catches and logs provider exceptions itself, so
+                // reaching here does not mean the probe worked. Report it as unverified so a
+                // guessed row's provenance is left alone instead of being stamped as ffprobe.
+                return false;
+            }
         }
         catch (Exception ex)
         {

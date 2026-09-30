@@ -4,7 +4,9 @@ using MediaBrowser.Model.Entities;
 
 namespace Gelato.Streams;
 
-/// <summary>Applies the provenance rules to the stream row a playback request resolves to.</summary>
+/// <summary>
+/// Applies the provenance rules to the stream row a playback request resolves to.
+/// </summary>
 public static class ProbeGate
 {
     public static bool ShouldProbe(BaseItem owner, MediaSourceInfo selected) =>
