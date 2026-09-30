@@ -343,11 +343,11 @@ It is measured during live verification.
 
 ## Findings carried to later sub-projects
 
-- **Standalone bug, not part of parity:** since upstream commit `1ef6fdf` (2026-02-21, "code
-  cleanup and null checks"), `StremioStream.IsValid()` requires a URL, so torrent-only
+- **Standalone bug, not part of parity:** since upstream commit `2cf9b26` (2026-02-01, "fix:
+  mark virtual if no mediasources"), `StremioStream.IsValid()` requires a URL, so torrent-only
   streams are rejected before `SyncStreams` builds their torrent-proxy path. That branch is
   unreachable for them, and Gelato's torrent engine never sees a pure torrent stream.
-  Fixing it changes which versions users see, so it gets its own change.
+  Fixing it changes which versions users see, so it gets its own change (PR #13).
 
 - **Sub-project 2:** AIOStreams' Jellyfin mode treats a stream that needs request or
   response headers as **not playable** unless AIOStreams proxied it (`isPlayable`,
