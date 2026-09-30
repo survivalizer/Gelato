@@ -624,7 +624,7 @@ public sealed class GelatoManager(
         }
 
         var upsertedStreams = new List<Video>();
-        var pendingMediaStreams = new List<(Guid ItemId, IReadOnlyList<MediaStream> Streams)>();
+        var pendingMediaStreams = new List<PendingMediaStreams>();
 
         for (var i = 0; i < entries.Count; i++)
         {
@@ -732,8 +732,8 @@ public sealed class GelatoManager(
         persistence.SaveItems(upsertedStreams, ct);
 
         // A media stream references its item, so these go in after the rows are saved.
-        var provenanceCleared = new List<Video>();
-        foreach (var (itemId, mediaStreams) in pendingMediaStreams)
+        var provenanceRestored = new List<Video>();
+        foreach (var (itemId, mediaStreams, priorProvenance) in pendingMediaStreams)
         {
             try
             {
@@ -747,18 +747,19 @@ public sealed class GelatoManager(
             {
                 _log.LogWarning(ex, "SyncStreams: failed to save media streams for {Id}", itemId);
 
-                // So the next sync re-evaluates and rewrites this row instead of a mismatched
-                // provenance skipping it forever.
+                // The save is one transaction, so the row keeps the streams it had before this
+                // sync. Roll its provenance back to match them: the next sync then retries the
+                // same write, and older guessed streams are never mistaken for ffprobe's.
                 var row = upsertedStreams.FirstOrDefault(x => x.Id == itemId);
                 if (row is not null)
                 {
-                    row.SetGelatoData<string?>(MediaInfoProvenance.Key, null);
-                    provenanceCleared.Add(row);
+                    row.SetGelatoData(MediaInfoProvenance.Key, priorProvenance);
+                    provenanceRestored.Add(row);
                 }
             }
         }
-        if (provenanceCleared.Count > 0)
-            persistence.SaveItems(provenanceCleared, ct);
+        if (provenanceRestored.Count > 0)
+            persistence.SaveItems(provenanceRestored, ct);
 
         var newIds = new HashSet<Guid>(upsertedStreams.Select(x => x.Id));
         var stale = existingByGuid
@@ -816,9 +817,10 @@ public sealed class GelatoManager(
     private static void ApplyMediaInfoPlan(
         Video row,
         RowMediaInfoPlan plan,
-        List<(Guid ItemId, IReadOnlyList<MediaStream> Streams)> pending
+        List<PendingMediaStreams> pending
     )
     {
+        var priorProvenance = row.GelatoData<string>(MediaInfoProvenance.Key);
         if (plan.Provenance is not null)
             row.SetGelatoData(MediaInfoProvenance.Key, plan.Provenance);
 
@@ -832,8 +834,14 @@ public sealed class GelatoManager(
         if (plan.RunTimeTicks is { } ticks)
             row.RunTimeTicks = ticks;
 
-        pending.Add((row.Id, plan.Streams));
+        pending.Add(new PendingMediaStreams(row.Id, plan.Streams, priorProvenance));
     }
+
+    private sealed record PendingMediaStreams(
+        Guid ItemId,
+        IReadOnlyList<MediaStream> Streams,
+        string? PriorProvenance
+    );
 
     private bool HasVideoStream(Guid itemId) =>
         mediaStreamRepository
