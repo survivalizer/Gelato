@@ -50,11 +50,18 @@ public class StreamClassifierTests
         Assert.False(StreamClassifier.IsPlayable(torrent, p2pEnabled: false));
     }
 
-    /// <summary>Rejected by today's IsValid(); fixing that is a separate change.</summary>
+    /// <summary>
+    /// A torrent-only stream plays through the P2P proxy, so it follows the P2P setting and is
+    /// never a notice.
+    /// </summary>
     [Fact]
-    public void TorrentOnlyStream_IsDropped()
+    public void TorrentOnlyStream_FollowsTheP2PSetting()
     {
-        Assert.Empty(StreamClassifier.PlanSync([S(infoHash: new string('a', 40))], true));
+        var torrent = S(infoHash: new string('a', 40));
+
+        var planned = Assert.Single(StreamClassifier.PlanSync([torrent], true));
+        Assert.False(planned.IsNotice);
+        Assert.Empty(StreamClassifier.PlanSync([torrent], false));
     }
 
     [Theory]
