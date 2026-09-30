@@ -262,7 +262,7 @@ public sealed class MediaSourceManagerDecorator(
                     || (x.GelatoData<List<Guid>>("userIds")?.Contains(userId) ?? false)
                 )
             )
-            .OrderBy(x => x.GelatoData<int?>("index") ?? int.MaxValue)
+            .OrderVersions()
             .Select(s =>
             {
                 var k = GetVersionInfo(s, MediaSourceType.Grouping, user);

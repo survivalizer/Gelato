@@ -753,7 +753,12 @@ public sealed class GelatoManager(
         var toDelete = stale
             .Where(item => item.GelatoData<List<Guid>>("userIds") is { Count: 0 })
             .ToList();
-        var toSave = stale.Except(toDelete).ToList();
+        // A stale notice is not deleted below (soft-delete only), so it must still be saved
+        // with its emptied userIds or it would keep showing to the user it was removed for.
+        var toSave = stale
+            .Except(toDelete)
+            .Concat(toDelete.Where(StreamClassifier.IsNoticeRow))
+            .ToList();
 
         try
         {

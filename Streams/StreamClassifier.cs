@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using MediaBrowser.Controller.Entities;
 
 namespace Gelato.Streams;
 
@@ -115,4 +116,16 @@ public static class StreamClassifier
     /// </summary>
     public static int PlayableCount(IReadOnlyList<SyncEntry> entries) =>
         entries.Count(e => !e.IsNotice);
+
+    /// <summary>Whether a saved version row is a notice, per its GelatoData flag.</summary>
+    public static bool IsNoticeRow(BaseItem row) => row.GelatoData<bool?>(NoticeKey) == true;
+
+    /// <summary>
+    /// Orders saved version rows the way playback must see them: every playable version before
+    /// every notice, so a stale notice sharing an index with a playable row never becomes the
+    /// default. Within each group, rows sort by their "index" GelatoData, absent index last.
+    /// </summary>
+    public static IOrderedEnumerable<T> OrderVersions<T>(this IEnumerable<T> rows)
+        where T : BaseItem =>
+        rows.OrderBy(IsNoticeRow).ThenBy(x => x.GelatoData<int?>("index") ?? int.MaxValue);
 }

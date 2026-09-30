@@ -1,4 +1,5 @@
 using Gelato.Streams;
+using MediaBrowser.Controller.Entities.Movies;
 
 namespace Gelato.Tests.Streams;
 
@@ -202,5 +203,62 @@ public class StreamClassifierTests
         Assert.Empty(
             StreamClassifier.PlanSync([S(url: Good, name: null, data: Typed("error"))], true)
         );
+    }
+
+    private static Movie Row(int? index, bool isNotice = false)
+    {
+        var row = new Movie();
+        if (index is not null)
+            row.SetGelatoData("index", index);
+        if (isNotice)
+            row.SetGelatoData(StreamClassifier.NoticeKey, true);
+        return row;
+    }
+
+    [Fact]
+    public void OrderVersions_PlayableBeatsNoticeAtTheSameIndex()
+    {
+        var notice = Row(index: 1, isNotice: true);
+        var playable = Row(index: 1, isNotice: false);
+
+        var ordered = StreamClassifier.OrderVersions(new[] { notice, playable }).ToList();
+
+        Assert.Equal(new[] { playable, notice }, ordered);
+    }
+
+    [Fact]
+    public void OrderVersions_NoticesComeAfterPlayables_RegardlessOfIndex()
+    {
+        var notice = Row(index: 0, isNotice: true);
+        var playable = Row(index: 5, isNotice: false);
+
+        var ordered = StreamClassifier.OrderVersions(new[] { notice, playable }).ToList();
+
+        Assert.Equal(new[] { playable, notice }, ordered);
+    }
+
+    [Fact]
+    public void OrderVersions_RowsWithoutIndex_SortLastWithinTheirGroup()
+    {
+        var withIndex = Row(index: 0);
+        var withoutIndex = Row(index: null);
+        var noticeWithIndex = Row(index: 0, isNotice: true);
+        var noticeWithoutIndex = Row(index: null, isNotice: true);
+
+        var ordered = StreamClassifier
+            .OrderVersions(new[] { noticeWithoutIndex, withoutIndex, noticeWithIndex, withIndex })
+            .ToList();
+
+        Assert.Equal(
+            new[] { withIndex, withoutIndex, noticeWithIndex, noticeWithoutIndex },
+            ordered
+        );
+    }
+
+    [Fact]
+    public void IsNoticeRow_ReadsTheNoticeGelatoDataFlag()
+    {
+        Assert.True(StreamClassifier.IsNoticeRow(Row(index: 0, isNotice: true)));
+        Assert.False(StreamClassifier.IsNoticeRow(Row(index: 0)));
     }
 }
